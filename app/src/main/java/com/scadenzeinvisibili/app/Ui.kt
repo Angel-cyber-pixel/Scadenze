@@ -70,7 +70,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -344,6 +348,42 @@ fun EditScreen(
     }
 
     val scanner = remember { GmsBarcodeScanning.getClient(ctx) }
+
+    val ocrFile = remember { File(ctx.cacheDir, "ocr.jpg") }
+    val takeOcrPhoto = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { ok: Boolean ->
+        if (ok) {
+            try {
+                val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", ocrFile)
+                val image = InputImage.fromFilePath(ctx, uri)
+                TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+                    .process(image)
+                    .addOnSuccessListener { result ->
+                        val found = parseExpiry(result.text)
+                        if (found != null) {
+                            expiry = found
+                            Toast.makeText(
+                                ctx,
+                                "Scadenza letta: ${fmtDate(found)}. Controlla che sia giusta.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            Toast.makeText(
+                                ctx,
+                                "Non trovo una data leggibile: scegli tu la data.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                    .addOnFailureListener {
+                        Toast.makeText(ctx, "Lettura non riuscita, riprova.", Toast.LENGTH_SHORT).show()
+                    }
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "Lettura non riuscita, riprova.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     val preview = remember(photo, photoTick) { loadPhoto(ctx, photo) }
     val daysLeft = expiry.toEpochDay() - LocalDate.now().toEpochDay()
 
@@ -455,7 +495,25 @@ fun EditScreen(
                 }
                 OutlinedButton(onClick = {
                     scanner.startScan()
-                        .addOnSuccessListener { b -> barcode = b.rawValue ?: "" }
+                        .addOnSuccessListener { b ->
+                            val code = b.rawValue ?: ""
+                            barcode = code
+                            if (code.isNotBlank()) {
+                                Toast.makeText(ctx, "Cerco il prodotto…", Toast.LENGTH_SHORT).show()
+                                fetchProductName(code) { found ->
+                                    if (found != null) {
+                                        name = found
+                                        Toast.makeText(ctx, "Trovato: $found", Toast.LENGTH_LONG).show()
+                                    } else {
+                                        Toast.makeText(
+                                            ctx,
+                                            "Prodotto non trovato: scrivi tu il nome.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            }
+                        }
                         .addOnFailureListener {
                             Toast.makeText(ctx, "Scanner non disponibile", Toast.LENGTH_SHORT).show()
                         }
@@ -463,6 +521,26 @@ fun EditScreen(
                     Text("▥ Codice a barre")
                 }
             }
+
+            OutlinedButton(
+                onClick = {
+                    try {
+                        if (!ocrFile.exists()) ocrFile.createNewFile()
+                        val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", ocrFile)
+                        takeOcrPhoto.launch(uri)
+                    } catch (e: Exception) {
+                        Toast.makeText(ctx, "Fotocamera non disponibile", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("📅 Leggi la scadenza dalla confezione")
+            }
+            Text(
+                "Il codice a barre dice che prodotto è, ma non la data: quella la leggo da una foto della data stampata.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             if (preview != null) {
                 Image(
